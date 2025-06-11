@@ -1,146 +1,120 @@
 #!/usr/bin/env python
-# agent_obsolescence.py
+# agent_obsolescence.py – version "in‑memory" 2025‑06
 """
-Agent anti-obsolescence Jedha — version PoC
-• Scanne tous les .ipynb du dépôt
-• Détecte les appels dépréciés listés dans DEPRECATED_MAP
-• Demande à Mistral un patch (diff unifié) pour les remplacer
-• Applique le patch sur le repo local
+Met à jour les notebooks (.ipynb) **directement en mémoire** : aucune diff,
+aucun appel au binaire `patch`.  Pour chaque cellule de code, on détecte les
+appels dépréciés et on demande à Mistral de renvoyer **le code corrigé** puis on
+ré‑écrit le notebook.
 """
+
+from __future__ import annotations
+
 import os
-import subprocess
+import re
 import sys
 from pathlib import Path
 from typing import List, Dict
 
-import nbformat
-from langchain_mistralai import ChatMistralAI
+import nbformat  # pip install nbformat
+from langchain_mistralai import ChatMistralAI  # pip install langchain-mistralai mistralai
 from langchain.schema import SystemMessage, HumanMessage
 
-
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# 1. CONFIGURATION GÉNÉRALE
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-#: clé API lue dans les variables d'environnement (export MISTRAL_API_KEY=...)
+# ---------------------------------------------------------------------------
+# CONFIGURATION
+# ---------------------------------------------------------------------------
 API_KEY = os.getenv("MISTRAL_API_KEY")
 if not API_KEY:
-    sys.exit("❌  MISTRAL_API_KEY absent ; exporte ta clé avant de lancer le script.")
+    sys.exit("❌  Variable MISTRAL_API_KEY introuvable ; exporte ta clé.")
 
-#: racine du dépôt (modifiable, ex: Path("content"))
 REPO_ROOT = Path(os.getenv("CONTENT_REPO", ".")).resolve()
+MODEL_NAME = os.getenv("MISTRAL_MODEL", "mistral-small")
 
-#: signatures obsolètes → suggestions
+# Signatures obsolètes → remplacement suggéré (REGEX keys)
+# Next probably check the outcome and based on that we will correct the functions or the import
 DEPRECATED_MAP: Dict[str, str] = {
-    # vues ensemble
-    "DataFrame.ix": "DataFrame.loc / DataFrame.iloc",
-    "Series.ravel(": "Series.to_numpy()  # ravel déprécié",
-    "freq='Q'": "freq='QE'",                 # alias de fréquence trimestrielle
-    ".format(": ".astype(str)(",
-    # ajoute tes propres patterns ci-dessous
+    # Index.format → astype(str)
+    r"\.format\(": ".astype(str)(",
+    # DataFrame / Series .ix → .loc / .iloc  (cas générique)
+    r"DataFrame\.ix": "DataFrame.loc / DataFrame.iloc",
+    # Series ravel (ravel()) → to_numpy()
+    r"\.ravel\(": ".to_numpy(",
+    # Alias de fréquence trimestrielle 'Q' ou "Q" → 'QE'
+    r"freq=[\"']Q[\"']": "freq='QE'",
 }
+# Pré-compile un méga-regex (OR) non échappé, insensible à la casse
+PATTERN_RE = re.compile("|".join(DEPRECATED_MAP.keys()), re.IGNORECASE)
 
 
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# 2. OUTILS
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 def list_notebooks(root: Path) -> List[Path]:
-    """Retourne tous les .ipynb sous la racine."""
     return list(root.rglob("*.ipynb"))
 
 
-def extract_code_cells(nb_path: Path) -> List[str]:
-    """Renvoie le contenu brut de chaque cellule de code d'un notebook."""
-    nb = nbformat.read(nb_path, as_version=4)
-    return [c["source"] for c in nb.cells if c.cell_type == "code"]
+# ---------------------------------------------------------------------------
+# LLM
+# ---------------------------------------------------------------------------
+chat = ChatMistralAI(model=MODEL_NAME, temperature=0.0)
+SYSTEM_MSG = SystemMessage(
+    content=(
+        "You are an expert Python instructor. When given a code snippet, "
+        "return ONLY a corrected snippet, no markdown fences, no explanations."))
 
 
-def scan_cell(cell_src: str) -> List[Dict[str, str]]:
-    """
-    Cherche les signatures obsolètes dans une cellule.
-    Retourne une liste de dicts {bad: ..., suggest: ...}.
-    """
-    issues = []
-    for bad, good in DEPRECATED_MAP.items():
-        if bad in cell_src:
-            issues.append({"bad": bad, "suggest": good})
-    return issues
-
-
-def build_prompt(file_path: str, snippet: str, issues: List[Dict[str, str]]) -> List:
-    """Construit le prompt (messages) pour Mistral."""
-    system = SystemMessage(
-        content=(
-            "You are a senior Python engineer. "
-            "Return ONLY a valid *unified diff* that replaces each deprecated "
-            "pattern by its suggested equivalent. No prose, no explanation."
-        )
-    )
-
-    # mini tableau des remplacements pour le LLM
-    mapping = "\n".join([f"- {i['bad']}  →  {i['suggest']}" for i in issues])
-
-    user_msg = HumanMessage(
-        content=(
-            f"File: {file_path}\n\n"
-            f"Deprecated mapping:\n{mapping}\n\n"
-            f"Problematic snippet:\n```\n{snippet}\n```\n\n"
-            "Produce the patch now."
-        )
-    )
-    return [system, user_msg]
-
-
-def call_llm(messages) -> str:
-    """Appelle Mistral et renvoie le diff brut."""
-    chat = ChatMistralAI(
-        model="mistral-small",  # ←⇢ 'mistral-large' en prod
-        temperature=0.0,
-        # La clé est lue dans l'env, pas besoin de la passer
-    )
-    resp = chat.invoke(messages)
+def fix_code_snippet(snippet: str, mapping: Dict[str, str]) -> str:
+    """Envoie le code au LLM et récupère la version corrigée."""
+    human_content = (
+        "Code to fix:\n" + snippet + "\n\n" +
+        "Replace any deprecated pattern according to this table (if present):\n" +
+        "\n".join([f"- {k} → {v}" for k, v in mapping.items()]))
+    resp = chat.invoke([SYSTEM_MSG, HumanMessage(content=human_content)])
     return resp.content.strip()
 
 
-def apply_patch(diff_text: str) -> None:
-    """Applique un diff unifié sur le repo courant via l'outil `patch`."""
-    if not diff_text.startswith("---"):
-        print("— le diff retourné ne semble pas valide, ignoré.")
-        return
+# ---------------------------------------------------------------------------
+# PIPELINE PRINCIPAL
+# ---------------------------------------------------------------------------
 
-    try:
-        subprocess.run(
-            ["patch", "-p1", "--forward"],
-            input=diff_text.encode(),
-            check=True,
-            capture_output=True,
-        )
-        print("✅  Patch appliqué.")
-    except subprocess.CalledProcessError as e:
-        print("⚠️  Patch non appliqué :", e.stderr.decode()[:200])
+def process_notebook(nb_path: Path) -> bool:
+    """Modifie le notebook en place. Retourne True s'il y a eu un changement."""
+    nb = nbformat.read(nb_path, as_version=4)
+    changed = False
+
+    for cell in nb.cells:
+        if cell.cell_type != "code":
+            continue
+        src: str = cell["source"]
+        if not PATTERN_RE.search(src):
+            continue  # rien à corriger
+
+        try:
+            fixed = fix_code_snippet(src, DEPRECATED_MAP)
+        except Exception as e:
+            print(f"⚠️  LLM failure on {nb_path.name}: {e}")
+            continue
+
+        if fixed and fixed != src:
+            cell["source"] = fixed
+            changed = True
+            print(f"→ Patched cell in {nb_path.name} (len {len(src)} -> {len(fixed)})")
+
+    if changed:
+        nbformat.write(nb, nb_path)
+    return changed
 
 
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# 3. PIPELINE PRINCIPAL
-# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 def main() -> None:
-    modified = False
+    modified_files = []
+    for nb in list_notebooks(REPO_ROOT):
+        if process_notebook(nb):
+            modified_files.append(nb.relative_to(REPO_ROOT))
 
-    for nb_path in list_notebooks(REPO_ROOT):
-        code_cells = extract_code_cells(nb_path)
-        for cell_src in code_cells:
-            issues = scan_cell(cell_src)
-            if not issues:
-                continue  # rien d'obsolète dans cette cellule
-
-            prompt_msgs = build_prompt(str(nb_path), cell_src, issues)
-            diff = call_llm(prompt_msgs)
-            apply_patch(diff)
-            modified = True
-
-    if modified:
-        print("🎉  Des patches ont été appliqués ; committe-les !")
+    if modified_files:
+        print("\n🎉  Notebooks mis à jour :")
+        for p in modified_files:
+            print(f" • {p}")
+        print("\n📝  Pense à git add / commit avant push.")
     else:
-        print("👍  Aucun appel obsolète trouvé.")
+        print("👍  Aucune mise à jour nécessaire.")
 
 
 if __name__ == "__main__":
