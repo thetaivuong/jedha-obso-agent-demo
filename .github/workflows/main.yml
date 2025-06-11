@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install nbformat libcst langchain-mistralai mistralai
+      - run: pip install nbformat libcst langchain langchain-mistralai mistralai 
       - run: python agent_obsolescence.py
       - name: Push patch & open PR
         run: |
