@@ -1,0 +1,29 @@
+name: Agent-Obsolescence
+
+on:
+  push:
+    paths: ['**.ipynb']      # déclenché à chaque modif de notebook
+  workflow_dispatch:         # bouton “Run workflow” manuel
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install nbformat libcst langchain-mistralai mistralai
+      - run: python agent_obsolescence.py
+      - name: Push patch & open PR
+        run: |
+          git config user.name 'jedha-bot'
+          git config user.email 'bot@jedha.com'
+          if [ -n "$(git status --porcelain)" ]; then
+              git checkout -b bot/auto-update || git checkout bot/auto-update
+              git add .
+              git commit -m 'auto: replace deprecated df.ix'
+              git push origin bot/auto-update --force
+          fi
