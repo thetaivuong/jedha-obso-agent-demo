@@ -125,7 +125,7 @@ if __name__ == "__main__":
 # 📄 GitHub Actions snippet (save under .github/workflows/agent-obsolescence.yml)
 # ---------------------------------------------------------------------------
 """
-name: Agent‑Obsolescence
+name: Agent_Obsolescence
 
 on:
   push:
