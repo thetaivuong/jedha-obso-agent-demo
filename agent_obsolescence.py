@@ -9,10 +9,7 @@ ré‑écrit le notebook.
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-=======
 import ast
->>>>>>> 5194d6b (agent_obs)
 import os
 import re
 import sys
@@ -48,9 +45,6 @@ DEPRECATED_MAP: Dict[str, str] = {
 # Pré-compile un méga-regex (OR) non échappé, insensible à la casse
 PATTERN_RE = re.compile("|".join(DEPRECATED_MAP.keys()), re.IGNORECASE)
 
-<<<<<<< HEAD
-
-=======
 FREQ_RE = re.compile(r"""freq\s*=\s*['"]Q['"]""")
 
 def is_valid_python(code: str) -> bool:
@@ -59,7 +53,6 @@ def is_valid_python(code: str) -> bool:
         return True
     except SyntaxError:
         return False
->>>>>>> 5194d6b (agent_obs)
 
 def list_notebooks(root: Path) -> List[Path]:
     return list(root.rglob("*.ipynb"))
@@ -84,9 +77,6 @@ def fix_code_snippet(snippet: str, mapping: Dict[str, str]) -> str:
     resp = chat.invoke([SYSTEM_MSG, HumanMessage(content=human_content)])
     return resp.content.strip()
 
-<<<<<<< HEAD
-
-=======
 def safe_fix(snippet: str) -> str:
     """Appelle le LLM, vérifie la syntaxe, fallback regex si besoin."""
     fixed = fix_code_snippet(snippet, DEPRECATED_MAP)
@@ -102,15 +92,10 @@ def safe_fix(snippet: str) -> str:
     print("⚠️  Impossible de corriger automatiquement la cellule.")
     return snippet
     
->>>>>>> 5194d6b (agent_obs)
 # ---------------------------------------------------------------------------
 # PIPELINE PRINCIPAL
 # ---------------------------------------------------------------------------
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 5194d6b (agent_obs)
 def process_notebook(nb_path: Path) -> bool:
     """Modifie le notebook en place. Retourne True s'il y a eu un changement."""
     nb = nbformat.read(nb_path, as_version=4)
@@ -129,14 +114,12 @@ def process_notebook(nb_path: Path) -> bool:
             print(f"⚠️  LLM failure on {nb_path.name}: {e}")
             continue
 
-<<<<<<< HEAD
         if fixed and fixed != src:
             cell["source"] = fixed
-=======
+            
         new_code = safe_fix(src)
         if new_code != src:
             cell["source"] = new_code
->>>>>>> 5194d6b (agent_obs)
             changed = True
             print(f"→ Patched cell in {nb_path.name} (len {len(src)} -> {len(fixed)})")
 
