@@ -1,11 +1,5 @@
 #!/usr/bin/env python
 # agent_obsolescence.py – version "in‑memory" 2025‑06
-"""
-Met à jour les notebooks (.ipynb) **directement en mémoire** : aucune diff,
-aucun appel au binaire `patch`.  Pour chaque cellule de code, on détecte les
-appels dépréciés et on demande à Mistral de renvoyer **le code corrigé** puis on
-ré‑écrit le notebook.
-"""
 
 from __future__ import annotations
 
@@ -16,13 +10,14 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 
-import nbformat  # pip install nbformat
-from langchain_mistralai import ChatMistralAI  # pip install langchain-mistralai mistralai
+import nbformat 
+from langchain_mistralai import ChatMistralAI  
 from langchain.schema import SystemMessage, HumanMessage
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION
 # ---------------------------------------------------------------------------
+
 API_KEY = os.getenv("MISTRAL_API_KEY")
 if not API_KEY:
     sys.exit("❌  Variable MISTRAL_API_KEY introuvable ; exporte ta clé.")
@@ -30,21 +25,15 @@ if not API_KEY:
 REPO_ROOT = Path(os.getenv("CONTENT_REPO", ".")).resolve()
 MODEL_NAME = os.getenv("MISTRAL_MODEL", "mistral-small")
 
-# Signatures obsolètes → remplacement suggéré (REGEX keys)
-# Next probably check the outcome and based on that we will correct the functions or the import
+# Signatures obsolètes
 DEPRECATED_MAP: Dict[str, str] = {
-    # Index.format → astype(str)
     r"\.format\(": ".astype(str)(",
-    # DataFrame / Series .ix → .loc / .iloc  (cas générique)
     r"DataFrame\.ix": "DataFrame.loc / DataFrame.iloc",
-    # Series ravel (ravel()) → to_numpy()
-    r"\.ravel\(": ".to_numpy(",
-    # Alias de fréquence trimestrielle 'Q' ou "Q" → 'QE'
+      r"\.ravel\(": ".to_numpy(",
     r"freq=[\"']Q[\"']": "freq='QE'",
 }
-# Pré-compile un méga-regex (OR) non échappé, insensible à la casse
+# Pré-compile 
 PATTERN_RE = re.compile("|".join(DEPRECATED_MAP.keys()), re.IGNORECASE)
-
 FREQ_RE = re.compile(r"""freq\s*=\s*['"]Q['"]""")
 
 def is_valid_python(code: str) -> bool:
@@ -61,6 +50,7 @@ def list_notebooks(root: Path) -> List[Path]:
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
+
 chat = ChatMistralAI(model=MODEL_NAME, temperature=0.0)
 SYSTEM_MSG = SystemMessage(
     content=(
@@ -106,14 +96,14 @@ def process_notebook(nb_path: Path) -> bool:
             continue
         src: str = cell["source"]
         if not PATTERN_RE.search(src):
-            continue  # rien à corriger
+            continue  
 
         try:
             fixed = fix_code_snippet(src, DEPRECATED_MAP)
         except Exception as e:
             print(f"⚠️  LLM failure on {nb_path.name}: {e}")
             continue
-
+            
         if fixed and fixed != src:
             cell["source"] = fixed
             
